@@ -6,15 +6,16 @@ package cmd
 import (
 	"context"
 	"github.com/gorilla/mux"
+	"github.com/okiww/billing-system-okky/configs"
+	"github.com/okiww/billing-system-okky/pkg/db"
+	"github.com/okiww/billing-system-okky/pkg/logger"
 	"github.com/okiww/billing-system-okky/port/rest"
+	"github.com/spf13/cobra"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
-
-	"github.com/spf13/cobra"
 )
 
 // httpCmd represents the http command
@@ -39,16 +40,18 @@ func init() {
 func ServeHttp() {
 	router := mux.NewRouter()
 	rest.RegisterRoutes(router)
+	cfg := configs.InitConfig()
+	db.InitDB(cfg.DB.Source)
 
 	// Create the HTTP server
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    cfg.Http.Addr,
 		Handler: router,
 	}
 
 	// Run the server in a separate goroutine
 	go func() {
-		log.Println("Server running on port 8080")
+		log.Println("Server running on port", cfg.Http.Addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed to start: %v", err)
 		}
@@ -62,12 +65,20 @@ func ServeHttp() {
 	<-stop
 	log.Println("Shutting down server...")
 
-	// Create a context for server shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	// Server run context
+	serverCtx, serverStopCtx := context.WithCancel(context.Background())
+	defer func() {
+		// extra handling here
+		err := db.CloseDB()
+		if err != nil {
+			logger.Fatalf("failed close db %s", err.Error())
+		}
+		serverStopCtx()
+		<-serverCtx.Done()
+	}()
 
 	// Attempt a graceful shutdown
-	if err := server.Shutdown(ctx); err != nil {
+	if err := server.Shutdown(serverCtx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
